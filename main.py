@@ -1,3 +1,7 @@
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
+
+
 import sys
 import os
 sys.path.append(os.path.abspath('./'))

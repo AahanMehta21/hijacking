@@ -19,12 +19,14 @@ from functools import wraps
 
 import pdb
 import numpy as np
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
+
 from keras import backend as K
 from keras.layers import Conv2D, Add,\
     ZeroPadding2D, UpSampling2D, Concatenate, MaxPooling2D
 from keras.layers.advanced_activations import LeakyReLU
-from keras.layers.normalization import BatchNormalization
+from keras.layers import BatchNormalization
 from keras.models import Model
 from keras.regularizers import l2
 

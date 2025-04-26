@@ -1,0 +1,8 @@
+numpy==1.23.5
+tensorflow==2.8.2
+keras==2.8.0
+opencv-python
+scikit-learn
+tqdm
+Pillow
+scikit-video
