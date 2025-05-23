@@ -1,3 +1,9 @@
+import os
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["TF_NUM_INTRAOP_THREADS"] = "1"
+os.environ["TF_NUM_INTEROP_THREADS"] = "1"
+
+
 import tensorflow.compat.v1 as tf
 tf.disable_v2_behavior()
 
@@ -59,3 +65,6 @@ if __name__ == "__main__":
 
         ret = attack_video(params, video_path=video_path, attack_det_id_dict=attack_det_id_dict, patch_bbox=patch_bbox, moving_direction=moving_direction, is_return=True)
         results.append(ret)
+        from keras import backend as K
+        K.clear_session()
+

@@ -140,7 +140,7 @@ def is_missing_detection(detected_objects_list, target_bbox, target_id=0):
     if float(temp_area) / float(target_area) < 0.3:
         return True
     return False
-
+    
 def tracker_bbox_list(tracker_list):
     ret = []
     for tracker in tracker_list:
@@ -163,7 +163,7 @@ def attack_video(params, video_path=None, attack_det_id_dict=None, patch_bbox=No
     attack_frame_list.sort()
 
     attacking_flag = False
-    attack_count_idx = 0
+    attack_count_idx = 0    
 
     is_init = True
     params_min_hits = params['min_hits']
@@ -181,7 +181,7 @@ def attack_video(params, video_path=None, attack_det_id_dict=None, patch_bbox=No
         detected_objects_list = sort_bbox_by_area(detected_objects_list)
         if len(detected_objects_list) != 0:
             nat_detected_objects_list = copy.deepcopy(detected_objects_list)
-
+            
         if frame_count in attack_frame_list or attacking_flag == True:
             target_det_id = attack_det_id_dict[frame_count - attack_count_idx][attack_count_idx]
 
@@ -260,6 +260,32 @@ def attack_video(params, video_path=None, attack_det_id_dict=None, patch_bbox=No
         image_track, params, match_info = pipeline(image, detected_objects_list, frame_count, params, detect_output=True, verbose=verbose, virtual_attack=virtual_attack, return_match_info=True, is_init=is_init)
 
         cv2.imwrite('./output/track/' + str(frame_count) + '.png', image_track)
+        # Convert PIL image to OpenCV format
+        image_to_show = np.array(image_yolo_pil)
+        image_to_show = cv2.cvtColor(image_to_show, cv2.COLOR_RGB2BGR)
+
+        # ======================= DRAWING =======================
+
+        # Draw NATURAL detections (original YOLO detections) in GREEN
+        if 'nat_detected_objects_list' in locals() and nat_detected_objects_list:
+            for det in nat_detected_objects_list:
+                bbox = det['bbox']
+                x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
+                cv2.rectangle(image_to_show, (x1, y1), (x2, y2), (0, 255, 0), 2)  # GREEN for real detection
+
+        # Draw ATTACK (fabricated) bbox in RED if currently attacking
+        if 'attack_bbox' in locals() and attacking_flag:
+            x1, y1, x2, y2 = int(attack_bbox[0]), int(attack_bbox[1]), int(attack_bbox[2]), int(attack_bbox[3])
+            cv2.rectangle(image_to_show, (x1, y1), (x2, y2), (0, 0, 255), 2)  # RED for fabricated bbox
+
+        # ========================================================
+
+        # Show image
+        cv2.imshow("Attacked Frame", image_to_show)
+
+        # Wait key for a very short time
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
 
         match_info_prev = copy.deepcopy(match_info)
         detected_objects_list_prev = copy.deepcopy(nat_detected_objects_list)
