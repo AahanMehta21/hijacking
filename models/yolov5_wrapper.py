@@ -29,7 +29,7 @@ class YOLOv3(object):
         self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
         self.logger.info(f"Loading yolov5 from torch.hub...")
         # self.model = torch.hub.load('ultralytics/yolov5', 'yolov5s', pretrained=True).to(self.device).eval()
-        self.model = YOLO('yolov5s.pt').to(self.device).eval()
+        self.model = YOLO('yolov5su.pt').to(self.device).eval()
         self.class_names = self.model.names
         self.model_image_size = (416, 416) 
         self.logger.info("Model loaded successfully.")
