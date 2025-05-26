@@ -1,7 +1,7 @@
 '''apply only one fabrication attack'''
 import sys
 sys.path.append("../")
-from models.yolov3_wrapper import YOLOv3
+from models.yolov5_wrapper import YOLOv3
 from pipeline_center import pipeline
 from utils.utils import letterbox_image, box_iou
 from PIL import Image

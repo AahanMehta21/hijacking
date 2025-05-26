@@ -1,5 +1,6 @@
 from PIL import Image
 import numpy as np
+import torch
 
 #Debug
 import tensorflow.compat.v1 as tf
@@ -29,54 +30,54 @@ def letterbox_image(image, size):
     new_image.paste(image, ((w-nw)//2, (h-nh)//2))
     return new_image
 
-def letterbox_image_tf_dynamic(image, size, resize_method=ResizeMethod.BILINEAR):
-    """ Letterbox image that handles dynamic Tensor type """
-    if len(image.get_shape()) == 4:
-        ih, iw = tf.shape(image)[1], tf.shape(image)[2]
-        images = image
-    else:
-        ih, iw = tf.shape(image)[0], tf.shape(image)[1]
-        images = [image]
-    w, h = tf.constant(size[0]), tf.constant(size[1])
-    scale = tf.minimum(w / iw, h / ih)
-    nw = tf.cast(tf.cast(iw, tf.float64) * scale, tf.int32)
-    nh = tf.cast(tf.cast(ih, tf.float64) * scale, tf.int32)
+# def letterbox_image_tf_dynamic(image, size, resize_method=ResizeMethod.BILINEAR):
+#     """ Letterbox image that handles dynamic Tensor type """
+#     if len(image.get_shape()) == 4:
+#         ih, iw = tf.shape(image)[1], tf.shape(image)[2]
+#         images = image
+#     else:
+#         ih, iw = tf.shape(image)[0], tf.shape(image)[1]
+#         images = [image]
+#     w, h = tf.constant(size[0]), tf.constant(size[1])
+#     scale = tf.minimum(w / iw, h / ih)
+#     nw = tf.cast(tf.cast(iw, tf.float64) * scale, tf.int32)
+#     nh = tf.cast(tf.cast(ih, tf.float64) * scale, tf.int32)
     
-    image_tensor = tf.image.resize_images(images, (nh, nw), method=resize_method, align_corners=True)
+#     image_tensor = tf.image.resize_images(images, (nh, nw), method=resize_method, align_corners=True)
     
-    h_pad = tf.cast((h-nh)//2, tf.int32)
-    w_pad = tf.cast((w-nw)//2, tf.int32)
-    c_pad = 0
-    if len(image_tensor.shape) == 4:
-        paddings = [[0,0], [h_pad, h_pad], [w_pad, w_pad], [c_pad, c_pad]]
-    else:
-        paddings = [[h_pad, h_pad], [w_pad, w_pad], [c_pad, c_pad]]
+#     h_pad = tf.cast((h-nh)//2, tf.int32)
+#     w_pad = tf.cast((w-nw)//2, tf.int32)
+#     c_pad = 0
+#     if len(image_tensor.shape) == 4:
+#         paddings = [[0,0], [h_pad, h_pad], [w_pad, w_pad], [c_pad, c_pad]]
+#     else:
+#         paddings = [[h_pad, h_pad], [w_pad, w_pad], [c_pad, c_pad]]
     
-    image_tensor = tf.pad(image_tensor, paddings, constant_values=128. / 255.)
-    return image_tensor
+#     image_tensor = tf.pad(image_tensor, paddings, constant_values=128. / 255.)
+#     return image_tensor
 
     
 
-def letterbox_image_tf_static(image, raw_size, tgt_size, resize_method=ResizeMethod.BILINEAR):
-    """ Letterbox image that only handles static shape, but more efficiently."""
-    if len(image.shape) == 4:
-        images = image
-    else:
-        images = [image]
+# def letterbox_image_tf_static(image, raw_size, tgt_size, resize_method=ResizeMethod.BILINEAR):
+#     """ Letterbox image that only handles static shape, but more efficiently."""
+#     if len(image.shape) == 4:
+#         images = image
+#     else:
+#         images = [image]
     
-    iw, ih = raw_size
-    w, h = tgt_size
-    scale = min(w / iw, h / ih)
-    nw = int(iw * scale)
-    nh = int(ih * scale)
+#     iw, ih = raw_size
+#     w, h = tgt_size
+#     scale = min(w / iw, h / ih)
+#     nw = int(iw * scale)
+#     nh = int(ih * scale)
 
-    h_pad, w_pad, c_pad = (h - nh) // 2, (w - nw) // 2, 0
+#     h_pad, w_pad, c_pad = (h - nh) // 2, (w - nw) // 2, 0
 
-    image_tensor = tf.image.resize_images(images, (nh, nw), method=resize_method, align_corners=True)
-    paddings = [[0,0], [h_pad, h_pad], [w_pad, w_pad], [c_pad, c_pad]]
+#     image_tensor = tf.image.resize_images(images, (nh, nw), method=resize_method, align_corners=True)
+#     paddings = [[0,0], [h_pad, h_pad], [w_pad, w_pad], [c_pad, c_pad]]
 
-    image_tensor = tf.pad(image_tensor, paddings, constant_values=128. / 255.)
-    return image_tensor
+#     image_tensor = tf.pad(image_tensor, paddings, constant_values=128. / 255.)
+#     return image_tensor
 
 
 def image_to_ndarray(image, expand_dims=True):
