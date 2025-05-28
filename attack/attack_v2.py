@@ -94,6 +94,19 @@ def bgr2rgb(bgr_array):
     temp.append(bgr_array[:,:,0])
     return np.transpose(np.array(temp),(1, 2, 0))
 
+def bbox_inside_region(target_bbox, region_bbox):
+    """
+    Check if target_bbox is inside region_bbox
+    target_bbox: [left, top, right, bottom]
+    region_bbox: [left, top, right, bottom]
+    """
+    if (target_bbox[0] >= region_bbox[0] and
+        target_bbox[1] >= region_bbox[1] and
+        target_bbox[2] <= region_bbox[2] and
+        target_bbox[3] <= region_bbox[3]):
+        return True
+    return False
+
 def find_match_trk(match_info, det_id):
     match_info_pair = match_info[0]
     for temp_pair in match_info_pair:
@@ -147,7 +160,7 @@ def tracker_bbox_list(tracker_list):
         ret.append((tracker.obj))
     return ret
 
-def attack_video(params, video_path=None, attack_det_id_dict=None, patch_bbox=None, moving_direction=None, verbose=0, is_return=False):
+def attack_video(params, video_path=None, attack_det_id_dict=None, patch_bbox=None, moving_direction=None, verbose=0, is_return=False, region_bbox=None, check_region_bbox=False):
 
     detector = KerasYOLOv3Model_plus(sess = K.get_session())
 
@@ -163,7 +176,7 @@ def attack_video(params, video_path=None, attack_det_id_dict=None, patch_bbox=No
     attack_frame_list.sort()
 
     attacking_flag = False
-    attack_count_idx = 0    
+    attack_count_idx = 0
 
     is_init = True
     params_min_hits = params['min_hits']
@@ -177,13 +190,27 @@ def attack_video(params, video_path=None, attack_det_id_dict=None, patch_bbox=No
         detected_objects_list = detector.detect_image(image_yolo_pil)
         detected_objects_list = nms_fine_tune(detected_objects_list)
 
-
         detected_objects_list = sort_bbox_by_area(detected_objects_list)
+        
         if len(detected_objects_list) != 0:
             nat_detected_objects_list = copy.deepcopy(detected_objects_list)
             
         if frame_count in attack_frame_list or attacking_flag == True:
+            # print(attack_det_id_dict)
             target_det_id = attack_det_id_dict[frame_count - attack_count_idx][attack_count_idx]
+            while check_region_bbox is True:
+                if bbox_inside_region(detected_objects_list[target_det_id]['bbox'], region_bbox):
+                    break
+                else:
+                    target_det_id += 1
+                if target_det_id >= len(detected_objects_list):
+                    print("No more detection to attack in specified region {}".format(region_bbox))
+                    target_det_id = 0
+                    break
+                    # if is_return:
+                    #     return n_attacks
+                    # else:
+                    #     break
 
             if attack_count_idx == 0:
                 attacking_flag = True
@@ -277,6 +304,11 @@ def attack_video(params, video_path=None, attack_det_id_dict=None, patch_bbox=No
         if 'attack_bbox' in locals() and attacking_flag:
             x1, y1, x2, y2 = int(attack_bbox[0]), int(attack_bbox[1]), int(attack_bbox[2]), int(attack_bbox[3])
             cv2.rectangle(image_to_show, (x1, y1), (x2, y2), (0, 0, 255), 2)  # RED for fabricated bbox
+        
+        if check_region_bbox and region_bbox is not None:
+            # Draw the region bbox in BLUE
+            x1, y1, x2, y2 = int(region_bbox[0]), int(region_bbox[1]), int(region_bbox[2]), int(region_bbox[3])
+            cv2.rectangle(image_to_show, (x1, y1), (x2, y2), (255, 0, 0), 2)
 
         # ========================================================
 
