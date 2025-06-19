@@ -15,6 +15,7 @@ import copy
 import math
 import os
 from tqdm import tqdm
+import torch
 
 import pdb
 
@@ -153,12 +154,72 @@ def is_missing_detection(detected_objects_list, target_bbox, target_id=0):
     if float(temp_area) / float(target_area) < 0.3:
         return True
     return False
+
+def is_within_size(bbox, size):
+    """
+    Check if bbox is within the specified size.
+    bbox: [left, top, right, bottom]
+    size: [width, height]
+    """
+    bbox_size = _box_area(bbox)
+    if bbox_size < size[0] * size[1]:
+        return True
+    return False
     
 def tracker_bbox_list(tracker_list):
     ret = []
     for tracker in tracker_list:
         ret.append((tracker.obj))
     return ret
+
+def apply_patch_to_frame(image_tensor, patch, attack_bbox):
+    _, H, W = image_tensor.shape
+    patch_size = patch.shape[1]  # assuming square patch
+
+    # Place patch in upper-left corner of the attack_bbox
+    x1 = int(attack_bbox[0])
+    y1 = int(attack_bbox[1])
+
+    # Ensure we don't go out of bounds
+    if x1 + patch_size > W:
+        x1 = W - patch_size
+    if y1 + patch_size > H:
+        y1 = H - patch_size
+
+    # Apply patch to image
+    patched_image = image_tensor.clone()
+    patched_image[:, y1:y1+patch_size, x1:x1+patch_size] = patch
+
+    return patched_image
+
+
+
+def compute_attack_loss(detections, target_class, original_bbox, fabricated_bbox, patch_bbox, device='cuda' if torch.cuda.is_available() else 'cpu'):
+    erase_loss = torch.tensor(0.0, device=device)
+    fabricate_loss = torch.tensor(0.0, device=device)
+
+    for det in detections:
+        score = torch.tensor(det['score'], device=device)
+
+        # Convert bboxes to tensors
+        bbox_tensor = torch.tensor(det['bbox'], dtype=torch.float32, device=device)
+        original_bbox_tensor = torch.tensor(original_bbox, dtype=torch.float32, device=device)
+        fabricated_bbox_tensor = torch.tensor(fabricated_bbox, dtype=torch.float32, device=device)
+        patch_bbox_tensor = torch.tensor(patch_bbox, dtype=torch.float32, device=device)
+
+        iou_with_original = box_iou(bbox_tensor, original_bbox_tensor)
+        iou_with_fabricated = box_iou(bbox_tensor, fabricated_bbox_tensor)
+        iou_with_patch = box_iou(bbox_tensor, patch_bbox_tensor)
+
+        if det['class_idx'] == target_class:
+            if iou_with_original > 0.5:
+                erase_loss = erase_loss + score  # erase = lower score
+            if iou_with_fabricated > 0.5 and iou_with_patch > 0.5:
+                fabricate_loss = fabricate_loss - score  # fabricate = raise score
+
+    total_loss = erase_loss + fabricate_loss
+    return total_loss
+
 
 def attack_video(params, video_path=None, attack_det_id_dict=None, patch_bbox=None, moving_direction=None, verbose=0, is_return=False, region_bbox=None, check_region_bbox=False):
 
@@ -180,13 +241,29 @@ def attack_video(params, video_path=None, attack_det_id_dict=None, patch_bbox=No
 
     is_init = True
     params_min_hits = params['min_hits']
+
+    patch_size = 60
+    patch = torch.rand((3, patch_size, patch_size), requires_grad=True)
+    optimizer = torch.optim.Adam([patch], lr=0.03)
+
+
     for frame_count, image in enumerate(videogen.nextFrame()): 
         if frame_count > 1:
             is_init = False
 
         image_yolo, _ = letterbox_image(image, shape=(416, 416), data_format='channels_last')
-        image = bgr2rgb((image_yolo * 255).astype(np.uint8))
-        image_yolo_pil = Image.fromarray((image_yolo * 255).astype(np.uint8))
+        # image = bgr2rgb((image_yolo * 255).astype(np.uint8))
+        # Convert to tensor (CHW) and normalize to [0,1]
+        image_tensor = torch.tensor(np.transpose(image_yolo, (2, 0, 1)), dtype=torch.float32)
+
+        # Inject the patch
+        patched_tensor = apply_patch_to_frame(image_tensor, patch, patch_bbox)
+        patched_tensor = patched_tensor.to(device='cuda' if torch.cuda.is_available() else 'cpu')
+
+        # Convert back to numpy HWC uint8
+        patched_np = (patched_tensor.detach().cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
+        image = bgr2rgb(patched_np)
+        image_yolo_pil = Image.fromarray(patched_np)
         detected_objects_list = detector.detect_image(image_yolo_pil)
         detected_objects_list = nms_fine_tune(detected_objects_list)
 
@@ -197,6 +274,7 @@ def attack_video(params, video_path=None, attack_det_id_dict=None, patch_bbox=No
             
         if frame_count in attack_frame_list or attacking_flag == True:
             # print(attack_det_id_dict)
+
             target_det_id = attack_det_id_dict[frame_count - attack_count_idx][attack_count_idx]
             while check_region_bbox is True:
                 if bbox_inside_region(detected_objects_list[target_det_id]['bbox'], region_bbox):
@@ -207,10 +285,10 @@ def attack_video(params, video_path=None, attack_det_id_dict=None, patch_bbox=No
                     print("No more detection to attack in specified region {}".format(region_bbox))
                     target_det_id = 0
                     break
-                    # if is_return:
-                    #     return n_attacks
-                    # else:
-                    #     break
+                    if is_return:
+                        return n_attacks
+                    else:
+                        break
 
             if attack_count_idx == 0:
                 attacking_flag = True
@@ -238,6 +316,17 @@ def attack_video(params, video_path=None, attack_det_id_dict=None, patch_bbox=No
                         return n_attacks
 
             if attacking_flag:
+                optimizer.zero_grad()
+                # loss compute
+                loss = compute_attack_loss(detected_objects_list, detected_objects_list[target_det_id]['class_idx'], target_init_trk_bbox, detected_objects_list[target_det_id]['bbox'], patch_bbox)
+                loss.backward()
+                print(f"Loss: {loss.item()}, Patch mean: {patch.mean().item():.4f}")
+                optimizer.step()
+                print(f"Loss: {loss.item()}, Patch mean: {patch.mean().item():.4f}")
+
+                with torch.no_grad():
+                    patch.clamp_(0, 1)
+
                 temp_attack_obj = detected_objects_list_prev[target_det_id]
                 target_det_prev = temp_attack_obj
                 target_trk_prev = params_prev['tracker_list'][target_trk_id].obj
@@ -310,6 +399,7 @@ def attack_video(params, video_path=None, attack_det_id_dict=None, patch_bbox=No
             x1, y1, x2, y2 = int(region_bbox[0]), int(region_bbox[1]), int(region_bbox[2]), int(region_bbox[3])
             cv2.rectangle(image_to_show, (x1, y1), (x2, y2), (255, 0, 0), 2)
 
+        cv2.waitKey(0)
         # ========================================================
 
         # Show image
