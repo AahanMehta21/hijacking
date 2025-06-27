@@ -38,9 +38,10 @@ class KerasYOLOv3Model_plus(YOLOv3):
         ]
 
         """
-        pred_dic = self.predict(image)
+        print(self.model)
+        pred_dic, raw_tensor = self.predict(image)
         pred_list = self._dic2list(pred_dic)
-        return pred_list
+        return pred_list, raw_tensor
 
     def _dic2list(self, pred_dic):
         pred_list = []
@@ -174,24 +175,76 @@ def tracker_bbox_list(tracker_list):
 
 def apply_patch_to_frame(image_tensor, patch, attack_bbox):
     _, H, W = image_tensor.shape
-    patch_size = patch.shape[1]  # assuming square patch
+    patch_size = patch.shape[1]
 
-    # Place patch in upper-left corner of the attack_bbox
     x1 = int(attack_bbox[0])
     y1 = int(attack_bbox[1])
 
-    # Ensure we don't go out of bounds
+    # Ensure patch stays in bounds
     if x1 + patch_size > W:
         x1 = W - patch_size
     if y1 + patch_size > H:
         y1 = H - patch_size
 
-    # Apply patch to image
+    # Create a mask with the patch inserted
     patched_image = image_tensor.clone()
-    patched_image[:, y1:y1+patch_size, x1:x1+patch_size] = patch
+
+    # Instead of in-place op, do differentiable addition
+    mask = torch.zeros_like(image_tensor)
+    mask[:, y1:y1+patch_size, x1:x1+patch_size] = 1.0
+    pad_patch = torch.zeros_like(image_tensor)
+    pad_patch[:, y1:y1+patch_size, x1:x1+patch_size] = patch
+
+    # Blend patch onto original image
+    patched_image = (1 - mask) * image_tensor + mask * pad_patch
 
     return patched_image
 
+def compute_L1_L2_loss(detections, fabricated_bbox, target_class, is_first_attack, num_classes, device='cuda' if torch.cuda.is_available() else 'cpu'):
+    L1 = torch.tensor(0.0, device=device)
+    L2 = torch.tensor(0.0, device=device)
+    ce = torch.nn.CrossEntropyLoss()
+
+    cxt = (fabricated_bbox[0] + fabricated_bbox[2]) / 2
+    cyt = (fabricated_bbox[1] + fabricated_bbox[3]) / 2
+    wt = fabricated_bbox[2] - fabricated_bbox[0]
+    ht = fabricated_bbox[3] - fabricated_bbox[1]
+
+    for det in detections:
+        bbox = det['bbox']
+        score = torch.tensor(det['score'], device=device)
+        cls_idx = det['class_idx']
+
+        # center and size
+        cx = (bbox[0] + bbox[2]) / 2
+        cy = (bbox[1] + bbox[3]) / 2
+        w = bbox[2] - bbox[0]
+        h = bbox[3] - bbox[1]
+
+        # indicator 1_i: does it cover (cxt, cyt)?
+        indicator = 1.0 if bbox[0] <= cxt <= bbox[2] and bbox[1] <= cyt <= bbox[3] else 0.0
+        indicator = torch.tensor(indicator, device=device)
+
+        # fake logits: put confidence in predicted class slot
+        logits = torch.zeros(num_classes, device=device)
+        logits[cls_idx] = score
+
+        # L1 = vanish loss
+        vanish_term = score ** 2 - ce(logits.unsqueeze(0), torch.tensor([target_class], device=device))
+        L1 += indicator * vanish_term
+
+        # L2 = fabricate loss
+        dist_loss = (cx - cxt)**2 + (cy - cyt)**2
+        size_loss = (torch.sqrt(torch.tensor(w)) - torch.sqrt(torch.tensor(wt)))**2 + \
+                    (torch.sqrt(torch.tensor(h)) - torch.sqrt(torch.tensor(ht)))**2
+        conf_loss = (1 - score)**2
+        cls_loss = ce(logits.unsqueeze(0), torch.tensor([target_class], device=device))
+
+        fabricate_term = dist_loss + size_loss + conf_loss + cls_loss
+        L2 += indicator * fabricate_term
+
+    λ = 0.0 if is_first_attack else 1.0
+    return L1 + λ * L2
 
 
 def compute_attack_loss(detections, target_class, original_bbox, fabricated_bbox, patch_bbox, device='cuda' if torch.cuda.is_available() else 'cpu'):
@@ -264,7 +317,18 @@ def attack_video(params, video_path=None, attack_det_id_dict=None, patch_bbox=No
         patched_np = (patched_tensor.detach().cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
         image = bgr2rgb(patched_np)
         image_yolo_pil = Image.fromarray(patched_np)
-        detected_objects_list = detector.detect_image(image_yolo_pil)
+        detected_objects_list, raw_tensor = detector.detect_image(image_yolo_pil)
+
+        patched_tensor_input = patched_tensor.unsqueeze(0)  # shape [1, 3, H, W]
+        patched_tensor_input.requires_grad_()
+
+        raw_outputs = detector.forward_raw_logits(patched_tensor_input)[0]
+        print("Output requires_grad:", raw_outputs.requires_grad)
+        loss = -raw_outputs[:, 4].mean()
+        loss.backward()
+        print("Patch grad norm:", patch.grad.norm())
+
+
         detected_objects_list = nms_fine_tune(detected_objects_list)
 
         detected_objects_list = sort_bbox_by_area(detected_objects_list)
@@ -318,7 +382,20 @@ def attack_video(params, video_path=None, attack_det_id_dict=None, patch_bbox=No
             if attacking_flag:
                 optimizer.zero_grad()
                 # loss compute
-                loss = compute_attack_loss(detected_objects_list, detected_objects_list[target_det_id]['class_idx'], target_init_trk_bbox, detected_objects_list[target_det_id]['bbox'], patch_bbox)
+                # loss = compute_attack_loss(detected_objects_list, detected_objects_list[target_det_id]['class_idx'], target_init_trk_bbox, detected_objects_list[target_det_id]['bbox'], patch_bbox)
+                is_first_attack = (attack_count_idx == 0)
+                target_class = detected_objects_list[target_det_id]['class_idx']
+                num_classes = len(detector.class_names)
+
+                # loss = compute_L1_L2_loss(detected_objects_list, patch_bbox, target_class, is_first_attack, num_classes)
+                # loss = -raw_tensor.boxes.conf.mean()
+
+                print("loss requires_grad:", loss.requires_grad)
+                print("loss grad_fn:", loss.grad_fn)
+                print("patch.grad is None before backward?", patch.grad is None)
+                loss.backward()
+                print("patch.grad after backward:", patch.grad)
+
                 loss.backward()
                 print(f"Loss: {loss.item()}, Patch mean: {patch.mean().item():.4f}")
                 optimizer.step()
@@ -326,6 +403,8 @@ def attack_video(params, video_path=None, attack_det_id_dict=None, patch_bbox=No
 
                 with torch.no_grad():
                     patch.clamp_(0, 1)
+                    
+                print(f"[{frame_count}] Loss: {loss.item():.4f}, Patch mean: {patch.mean().item():.4f}")
 
                 temp_attack_obj = detected_objects_list_prev[target_det_id]
                 target_det_prev = temp_attack_obj
